@@ -150,13 +150,21 @@ body { background:var(--bg); color:var(--text); font-family:-apple-system,BlinkM
 [data-theme="dark"] .leaflet-tile { filter:brightness(.85) contrast(1.1) saturate(.75); }
 .fb-tag { background:var(--bg3); border:1.5px solid var(--border); border-radius:20px; padding:5px 11px; font-size:0.75rem; font-weight:600; cursor:pointer; color:var(--text2); transition:all .15s; }
 .fb-tag.selected { background:var(--text); color:var(--bg); border-color:var(--text); }
+.map-pick-btn { background:var(--bg2); border:1.5px solid var(--border); border-radius:13px; padding:0 0.9rem; cursor:pointer; display:flex; align-items:center; justify-content:center; font-size:1.1rem; flex-shrink:0; height:100%; min-height:46px; }
+.map-pick-btn:active { background:var(--bg3); }
+#screen-mappick { position:relative; }
+.mappick-topbar { padding:0.8rem 1.5rem 0.45rem; display:flex; align-items:center; gap:10px; background:var(--bg); flex-shrink:0; border-bottom:.5px solid var(--border); }
+#mappick-map { flex:1; min-height:0; }
+.mappick-confirm { margin:0.6rem 1rem 1.1rem; background:var(--text); color:var(--bg); border:none; border-radius:13px; font-size:1rem; font-weight:700; padding:0.88rem; cursor:pointer; flex-shrink:0; display:flex; align-items:center; justify-content:center; gap:8px; }
+.mappick-confirm:disabled { opacity:.3; cursor:default; }
+.mappick-hint { text-align:center; font-size:0.78rem; color:var(--text3); padding:0.5rem 1rem 0; flex-shrink:0; }
 </style>
 </head>
 <body>
 
 <div id="screen-home" class="screen">
   <div class="home-header">
-    <div><h1>🏍️ MotoNav</h1><p>v1.7 &nbsp;·&nbsp; GPS navigator for riders</p></div>
+    <div><h1>🏍️ MotoNav</h1><p>v1.8 &nbsp;·&nbsp; GPS navigator for riders</p></div>
     <div class="header-actions">
       <button class="icon-btn" onclick="toggleSettings()">⚙️</button>
       <button class="icon-btn" onclick="location.reload()">🔄</button>
@@ -210,9 +218,12 @@ body { background:var(--bg); color:var(--text); font-family:-apple-system,BlinkM
 
   <p class="section-label" id="dest-label">Destination</p>
   <div class="dest-section">
-    <div class="dest-input-wrap">
-      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="var(--text3)" stroke-width="2.5" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
-      <input type="text" id="dest-input" placeholder="Where to?" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" oninput="onDestInput()"/>
+    <div style="display:flex;gap:7px;align-items:stretch;">
+      <div class="dest-input-wrap" style="flex:1;">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="var(--text3)" stroke-width="2.5" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+        <input type="text" id="dest-input" placeholder="Where to?" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" oninput="onDestInput()"/>
+      </div>
+      <button class="map-pick-btn" onclick="openMapPicker()" title="Pick on map">🗺️</button>
     </div>
     <div class="search-results hidden" id="search-results"></div>
   </div>
@@ -247,6 +258,19 @@ body { background:var(--bg); color:var(--text); font-family:-apple-system,BlinkM
     </div>
     <div id="fb-status" style="font-size:0.78rem;text-align:center;margin-top:0.6rem;min-height:1rem;"></div>
   </div>
+</div>
+
+<!-- MAP PICKER SCREEN -->
+<div id="screen-mappick" class="screen hidden">
+  <div class="mappick-topbar">
+    <button class="map-back-btn" onclick="closeMapPicker()">← Back</button>
+    <div class="map-title">Pick destination</div>
+  </div>
+  <div class="mappick-hint" id="mappick-hint">Tap anywhere on the map to drop a pin</div>
+  <div id="mappick-map"></div>
+  <button class="mappick-confirm" id="mappick-confirm" disabled onclick="confirmMapPick()">
+    <span id="mappick-confirm-label">Select a location first</span>
+  </button>
 </div>
 
 <div id="screen-map" class="screen hidden">
@@ -1070,6 +1094,62 @@ async function submitFeedback(){
     document.getElementById('fb-status').style.color='#e74c3c';
     btn.textContent='Send →';btn.disabled=false;
   }
+}
+
+// MAP PICKER
+var mapPickerMap=null, mapPickerMarker=null, mapPickedCoord=null;
+
+function openMapPicker(){
+  document.getElementById('screen-home').classList.add('hidden');
+  document.getElementById('screen-mappick').classList.remove('hidden');
+  mapPickedCoord=null;
+  document.getElementById('mappick-confirm').disabled=true;
+  document.getElementById('mappick-confirm-label').textContent='Select a location first';
+  document.getElementById('mappick-hint').textContent='Tap anywhere on the map to drop a pin';
+
+  if(!mapPickerMap){
+    mapPickerMap=L.map('mappick-map',{zoomControl:true,attributionControl:false});
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:18}).addTo(mapPickerMap);
+    mapPickerMap.on('click',function(e){onMapPickerTap(e.latlng);});
+  }
+  var center=userPos?[userPos.lat,userPos.lng]:[51.5,0];
+  mapPickerMap.setView(center,userPos?13:5);
+  setTimeout(function(){mapPickerMap.invalidateSize();},120);
+}
+
+function onMapPickerTap(latlng){
+  mapPickedCoord={lat:latlng.lat,lng:latlng.lng};
+  if(mapPickerMarker)mapPickerMap.removeLayer(mapPickerMarker);
+  var icon=L.divIcon({html:'<div style="background:#ef4444;width:16px;height:16px;border-radius:50%;border:3px solid #fff;box-shadow:0 2px 8px rgba(0,0,0,.5);"></div>',iconSize:[16,16],iconAnchor:[8,8],className:''});
+  mapPickerMarker=L.marker(latlng,{icon:icon}).addTo(mapPickerMap);
+  document.getElementById('mappick-confirm').disabled=true;
+  document.getElementById('mappick-confirm-label').textContent='Resolving address…';
+  document.getElementById('mappick-hint').textContent=latlng.lat.toFixed(5)+', '+latlng.lng.toFixed(5);
+
+  fetch('https://nominatim.openstreetmap.org/reverse?lat='+latlng.lat+'&lon='+latlng.lng+'&format=json',{headers:{'Accept-Language':'en','User-Agent':'MotoNav/1.8'}})
+    .then(function(r){return r.json();})
+    .then(function(d){
+      var name=d.display_name||(''+latlng.lat.toFixed(4)+', '+latlng.lng.toFixed(4));
+      mapPickedCoord.name=name;
+      document.getElementById('mappick-confirm').disabled=false;
+      document.getElementById('mappick-confirm-label').textContent='Use: '+name.split(',')[0];
+    })
+    .catch(function(){
+      mapPickedCoord.name=latlng.lat.toFixed(5)+', '+latlng.lng.toFixed(5);
+      document.getElementById('mappick-confirm').disabled=false;
+      document.getElementById('mappick-confirm-label').textContent='Use this location';
+    });
+}
+
+function confirmMapPick(){
+  if(!mapPickedCoord)return;
+  closeMapPicker();
+  selectDest(mapPickedCoord.lat,mapPickedCoord.lng,mapPickedCoord.name||'Picked location');
+}
+
+function closeMapPicker(){
+  document.getElementById('screen-mappick').classList.add('hidden');
+  document.getElementById('screen-home').classList.remove('hidden');
 }
 
 renderFavs();
