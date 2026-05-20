@@ -694,6 +694,9 @@ function confirmRoute(){
     });
   });
   stepCoords=steps.map(function(s){return{lat:s.lat,lng:s.lng};});
+  // Store full route shape for live distance tracking
+  routeShape=route.geometry.coordinates.map(function(c){return{lat:c[1],lng:c[0]};});
+  closestShapeIdx=0;
   stepIdx=0;userScrolled=false;lastSpokenStep=-1;
   _logStartTime=Date.now();_logTotalSteps=steps.length;
   var finalPt=allPoints[allPoints.length-1];
@@ -740,6 +743,8 @@ async function recalcRoute(){
       });
     });
     stepCoords=steps.map(function(s){return{lat:s.lat,lng:s.lng};});
+    routeShape=route.geometry.coordinates.map(function(c){return{lat:c[1],lng:c[0]};});
+    closestShapeIdx=0;
     stepIdx=0;userScrolled=false;lastSpokenStep=-1;
     renderAllSteps();updateBar();
     speakStep(0);
@@ -814,28 +819,65 @@ function updateBar(){
 }
 
 // GPS DURING NAV
+// routeShape holds all decoded coordinates of the full route
+var routeShape=[];
+var closestShapeIdx=0;
+
 function onNavGPS(){
-  updateBar();
-  if(stepIdx>=steps.length-1)return;
-  var next=stepCoords[stepIdx+1];
-  if(!next)return;
-  var distToNext=haversine(userPos.lat,userPos.lng,next.lat,next.lng);
-  if(distToNext<ADVANCE_M){
-    stepIdx++;userScrolled=false;
-    onStepAdvance();updateBar();fetchSpeedLimit();
+  document.getElementById('stat-speed').textContent=fmtSpeed(speedKmh);
+  if(!steps.length||stepIdx>=steps.length-1)return;
+
+  // Find closest point on route shape to current position
+  var searchFrom=Math.max(0,closestShapeIdx-2);
+  var searchTo=Math.min(routeShape.length-1,closestShapeIdx+30);
+  var bestDist=Infinity, bestIdx=closestShapeIdx;
+  for(var i=searchFrom;i<=searchTo;i++){
+    var d=haversine(userPos.lat,userPos.lng,routeShape[i].lat,routeShape[i].lng);
+    if(d<bestDist){bestDist=d;bestIdx=i;}
+  }
+  closestShapeIdx=bestIdx;
+
+  // Distance from current position to next maneuver point
+  var nextCoord=stepCoords[stepIdx+1];
+  if(!nextCoord)return;
+  var distToManeuver=haversine(userPos.lat,userPos.lng,nextCoord.lat,nextCoord.lng);
+
+  // Update current step distance display live
+  var stepDistEl=document.querySelector('.step-card.s0 .step-dist');
+  if(stepDistEl)stepDistEl.textContent='Now · '+fmtDist(distToManeuver/1000);
+
+  // Announce at ~300m before maneuver
+  if(distToManeuver<320&&distToManeuver>180&&lastSpokenStep!==stepIdx){
     speakStep(stepIdx);
-    if(stepIdx>=steps.length-1)showArrived();
+  }
+  // Announce again at ~80m
+  if(distToManeuver<80&&lastSpokenStep===stepIdx){
+    lastSpokenStep=stepIdx+1000; // prevent repeat
+    var s=steps[stepIdx];
+    speak(s.instruction);
+  }
+
+  // Advance step when within ADVANCE_M of maneuver
+  if(distToManeuver<ADVANCE_M){
+    stepIdx++;userScrolled=false;
+    lastSpokenStep=-1;
+    onStepAdvance();updateBar();fetchSpeedLimit();
+    if(stepIdx>=steps.length-1){showArrived();return;}
     return;
   }
-  // Off-route detection: check distance to current step path
-  var curr=stepCoords[stepIdx];
-  if(curr){
-    var distToCurr=haversine(userPos.lat,userPos.lng,curr.lat,curr.lng);
-    if(distToCurr>OFFROUTE_M&&speedKmh>5){
-      clearTimeout(_recalcTimer);
-      _recalcTimer=setTimeout(recalcRoute,3000);
-    }
+
+  // Off-route: if more than OFFROUTE_M from closest shape point and moving
+  if(bestDist>OFFROUTE_M&&speedKmh>5){
+    clearTimeout(_recalcTimer);
+    _recalcTimer=setTimeout(recalcRoute,3000);
   }
+
+  // Update total remaining distance
+  var totalRem=(distToManeuver/1000)+steps.slice(stepIdx+1).reduce(function(a,s){return a+s.dist;},0);
+  document.getElementById('stat-dist').textContent=fmtDist(totalRem);
+  var avg=speedKmh>15?speedKmh:65;
+  var eta=new Date(Date.now()+(totalRem/avg)*3600000);
+  document.getElementById('stat-eta').textContent=eta.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
 }
 
 // SPEED LIMIT
